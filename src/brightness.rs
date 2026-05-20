@@ -42,12 +42,16 @@ pub fn run_loop(state: Arc<SharedState>) {
     updater::spawn(Arc::clone(&state));
 
     let mut sun_times = SunTimes::fallback();
+    let mut has_valid_sun_times = false;
     let mut location: Option<(f64, f64)> = None;
 
     loop {
         let config = state.config.read().unwrap().clone();
 
-        if state.needs_refetch.swap(false, Ordering::Relaxed) || location.is_none() {
+        if state.needs_refetch.swap(false, Ordering::Relaxed)
+            || location.is_none()
+            || !has_valid_sun_times
+        {
             let monitors = curve::list_display_names();
             *state.detected_monitors.write().unwrap() = monitors;
 
@@ -74,9 +78,11 @@ pub fn run_loop(state: Arc<SharedState>) {
                             }
 
                             sun_times = st;
+                            has_valid_sun_times = true;
                             state.set_status("Running");
                         }
                         None => {
+                            has_valid_sun_times = false;
                             state.set_status("Polar night — no sunrise today");
                             thread::sleep(Duration::from_secs(config.update_interval_secs));
                             continue;
