@@ -37,10 +37,13 @@ pub fn fetch_forecast(
 
     let mut forecast = Vec::new();
     for (time_str, &cloud_pct) in resp.hourly.time.iter().zip(resp.hourly.cloud_cover.iter()) {
-        let time = time_str
+        let Some(time) = time_str
             .split('T')
             .nth(1)
-            .and_then(|t| NaiveTime::parse_from_str(t, "%H:%M").ok())?;
+            .and_then(|t| NaiveTime::parse_from_str(t, "%H:%M").ok())
+        else {
+            continue;
+        };
 
         if time < sunrise || time > sunset {
             continue;
