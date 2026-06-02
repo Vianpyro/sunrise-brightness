@@ -6,7 +6,7 @@ description = "Adjusts screen brightness based on sunrise/sunset - with system t
 license = "MIT"
 
 [dependencies]
-eframe = { version = "0.34.2", default-features = true }
+eframe = { version = "0.34.3", default-features = true }
 tray-icon = "0.24.0"
 brightness = { version = "0.8", features = ["blocking"] }
 solar-positioning = { version = "0.5.2", features = ["chrono"] }
