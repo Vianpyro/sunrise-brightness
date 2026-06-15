@@ -38,6 +38,16 @@ pub struct SunTimes {
     pub sunset: NaiveTime,
 }
 
+impl SunTimes {
+    pub fn fallback() -> Self {
+        Self {
+            sunrise: NaiveTime::from_hms_opt(6, 0, 0).unwrap(),
+            transit: NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+            sunset: NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+        }
+    }
+}
+
 pub fn compute_sun_times(lat: f64, lon: f64) -> Option<SunTimes> {
     let now: DateTime<FixedOffset> = Local::now().fixed_offset();
     let today_start = now.date_naive().and_hms_opt(0, 0, 0)?;

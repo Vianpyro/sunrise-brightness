@@ -41,15 +41,16 @@ fn fade_brightness(from: u32, to: u32) {
 pub fn run_loop(state: Arc<SharedState>) {
     updater::spawn(Arc::clone(&state));
 
-    let mut sun_times: Option<SunTimes> = None;
+    let mut sun_times = SunTimes::fallback();
+    let mut has_valid_sun_times = false;
     let mut location: Option<(f64, f64)> = None;
 
     loop {
         let config = state.config.read().unwrap().clone();
 
         if state.needs_refetch.swap(false, Ordering::Relaxed)
-            || sun_times.is_none()
             || location.is_none()
+            || !has_valid_sun_times
         {
             let monitors = curve::list_display_names();
             *state.detected_monitors.write().unwrap() = monitors;
@@ -76,10 +77,12 @@ pub fn run_loop(state: Arc<SharedState>) {
                                 *state.weather_forecast.write().unwrap() = forecast;
                             }
 
-                            sun_times = Some(st);
+                            sun_times = st;
+                            has_valid_sun_times = true;
                             state.set_status("Running");
                         }
                         None => {
+                            has_valid_sun_times = false;
                             state.set_status("Polar night — no sunrise today");
                             thread::sleep(Duration::from_secs(config.update_interval_secs));
                             continue;
@@ -88,19 +91,14 @@ pub fn run_loop(state: Arc<SharedState>) {
                 }
                 None => {
                     location = None;
-                    if let Some(ref st) = sun_times {
-                        apply_brightness(&config, &state, st, None);
-                    }
+                    apply_brightness(&config, &state, &sun_times, None);
                     thread::sleep(Duration::from_secs(config.update_interval_secs));
                     continue;
                 }
             }
         }
 
-        if let Some(ref st) = sun_times {
-            apply_brightness(&config, &state, st, location);
-        }
-
+        apply_brightness(&config, &state, &sun_times, location);
         thread::sleep(Duration::from_secs(config.update_interval_secs));
     }
 }
