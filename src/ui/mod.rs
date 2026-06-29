@@ -174,7 +174,7 @@ impl eframe::App for SettingsApp {
 
         let mut should_close = false;
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             should_close = self.draw_title_bar(ui, &ctx);
             ui.separator();
 
