@@ -1003,9 +1003,9 @@ dependencies = [
 
 [[package]]
 name = "eframe"
-version = "0.36.0"
+version = "0.36.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a9f6000a8c01ca5b79bb914777c85902a5173d9f6c44278463aa0039bee4ca4"
+checksum = "2afc0cbcdb6896b7bfb1dbbebaf7b9af9635ff38fd01e89bdd0174c1717b1857"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -4156,9 +4156,9 @@ dependencies = [
 
 [[package]]
 name = "solar-positioning"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43be6efda1aa40c21271a0349b351b09c15294c3d9c5a5facca4da97c373633c"
+checksum = "b1eed47102ac6e9248d3480c93a9efdff070b3e33e0680173f9b722f826b16e9"
 dependencies = [
  "chrono",
 ]
