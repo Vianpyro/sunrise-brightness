@@ -4198,7 +4198,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sunrise-brightness"
-version = "3.8.0"
+version = "3.9.0"
 dependencies = [
  "anyhow",
  "auto-launch",
@@ -4213,6 +4213,7 @@ dependencies = [
  "solar-positioning",
  "toml 1.1.4+spec-1.1.0",
  "tray-icon",
+ "x11rb",
 ]
 
 [[package]]

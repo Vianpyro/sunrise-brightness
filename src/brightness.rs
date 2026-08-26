@@ -13,10 +13,10 @@ use crate::solar::{self, SunTimes};
 use crate::updater;
 use crate::weather;
 
-fn set_all_displays(target: u32, config: &Config, active: &Option<String>) {
+fn set_all_displays(target: u32, config: &Config, lit: &inactive::LitDisplays) {
     for dev in brightness_devices().flatten() {
         let name = dev.device_name().unwrap_or_default();
-        let factor = inactive::dim_factor(&name, config, active);
+        let factor = inactive::dim_factor(&name, config, lit);
         let _ = dev.set((target as f64 * factor).round() as u32);
     }
 }
@@ -26,19 +26,19 @@ fn set_all_displays(target: u32, config: &Config, active: &Option<String>) {
 pub fn reapply(state: &SharedState) {
     let config = state.config.read().unwrap().clone();
     let targets = state.base_targets.read().unwrap().clone();
-    let active = state.active_display.read().unwrap().clone();
+    let lit = state.lit_displays.read().unwrap().clone();
 
     for dev in brightness_devices().flatten() {
         let name = dev.device_name().unwrap_or_default();
         let Some(&base) = targets.get(&name) else {
             continue;
         };
-        let factor = inactive::dim_factor(&name, &config, &active);
+        let factor = inactive::dim_factor(&name, &config, &lit);
         let _ = dev.set((base as f64 * factor).round() as u32);
     }
 }
 
-fn fade_brightness(from: u32, to: u32, config: &Config, active: &Option<String>) {
+fn fade_brightness(from: u32, to: u32, config: &Config, lit: &inactive::LitDisplays) {
     let duration = Duration::from_millis(3000);
     let start = Instant::now();
 
@@ -49,7 +49,7 @@ fn fade_brightness(from: u32, to: u32, config: &Config, active: &Option<String>)
         let eased = t * t * (3.0 - 2.0 * t);
 
         let value = from as f32 + (to as f32 - from as f32) * eased;
-        set_all_displays(value.round() as u32, config, active);
+        set_all_displays(value.round() as u32, config, lit);
 
         if t >= 1.0 {
             break;
@@ -178,7 +178,7 @@ fn apply_brightness(
     let base = config.global_curve.evaluate(progress);
     let global_target = (base * weather_factor).clamp(0.0, 100.0) as u32;
 
-    let active = state.active_display.read().unwrap().clone();
+    let lit = state.lit_displays.read().unwrap().clone();
 
     if config.monitors.is_empty() {
         let names = curve::list_display_names();
@@ -187,7 +187,7 @@ fn apply_brightness(
 
         let current = state.current_brightness.load(Ordering::Relaxed);
         if current != global_target {
-            fade_brightness(current, global_target, config, &active);
+            fade_brightness(current, global_target, config, &lit);
         }
     } else {
         let mut targets = HashMap::new();
@@ -202,7 +202,7 @@ fn apply_brightness(
                         .map(|v| (v * weather_factor).clamp(0.0, 100.0))
                 })
                 .unwrap_or(global_target as f64) as u32;
-            let factor = inactive::dim_factor(&name, config, &active);
+            let factor = inactive::dim_factor(&name, config, &lit);
             let _ = dev.set((target as f64 * factor).round() as u32);
             targets.insert(name, target);
         }

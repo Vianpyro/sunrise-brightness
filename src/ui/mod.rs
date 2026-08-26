@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tray_icon::menu::{MenuEvent, MenuId};
 
-use crate::config::{self, SharedState};
+use crate::config::{self, DimMode, SharedState};
 use crate::curve::{BrightnessCurve, MonitorOverride};
 
 pub struct SettingsApp {
@@ -27,6 +27,7 @@ pub struct SettingsApp {
     pub(crate) cloud_attenuation: f64,
     pub(crate) dim_inactive: bool,
     pub(crate) dim_inactive_factor: f64,
+    pub(crate) dim_mode: DimMode,
     pub(crate) global_curve: BrightnessCurve,
     pub(crate) monitor_overrides: Vec<MonitorOverride>,
 
@@ -57,6 +58,7 @@ impl SettingsApp {
             cloud_attenuation: config.cloud_attenuation,
             dim_inactive: config.dim_inactive,
             dim_inactive_factor: config.dim_inactive_factor,
+            dim_mode: config.dim_mode,
             global_curve: config.global_curve,
             monitor_overrides: config.monitors,
             active_tab: 0,
@@ -74,6 +76,7 @@ impl SettingsApp {
         self.cloud_attenuation = cfg.cloud_attenuation;
         self.dim_inactive = cfg.dim_inactive;
         self.dim_inactive_factor = cfg.dim_inactive_factor;
+        self.dim_mode = cfg.dim_mode;
         self.global_curve = cfg.global_curve;
         self.monitor_overrides = cfg.monitors;
         self.active_tab = 0;
@@ -90,6 +93,7 @@ impl SettingsApp {
             cloud_attenuation: self.cloud_attenuation,
             dim_inactive: self.dim_inactive,
             dim_inactive_factor: self.dim_inactive_factor,
+            dim_mode: self.dim_mode,
             global_curve: self.global_curve.clone(),
             monitors: self.monitor_overrides.clone(),
         };

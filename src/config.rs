@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::RwLock;
@@ -24,6 +24,19 @@ pub struct Config {
     pub cloud_attenuation: f64,
     pub dim_inactive: bool,
     pub dim_inactive_factor: f64,
+    pub dim_mode: DimMode,
+}
+
+/// Which monitors count as "in use" and so keep full brightness.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimMode {
+    /// Only screens with no window at all get dimmed. Leaves a fullscreen video
+    /// on a second screen alone, so it is the safe default.
+    #[default]
+    Empty,
+    /// Every screen but the one holding the focused window gets dimmed.
+    Focused,
 }
 
 impl Default for Config {
@@ -39,6 +52,7 @@ impl Default for Config {
             cloud_attenuation: 0.5,
             dim_inactive: false,
             dim_inactive_factor: 0.3,
+            dim_mode: DimMode::default(),
         }
     }
 }
@@ -61,8 +75,9 @@ pub struct SharedState {
     /// Brightness each physical monitor would get if it were active, before the
     /// inactive-dim factor. Written by the sun loop, read when re-pushing.
     pub base_targets: RwLock<HashMap<String, u32>>,
-    /// Display holding the foreground window, e.g. `\.\DISPLAY1`.
-    pub active_display: RwLock<Option<String>>,
+    /// Displays kept at full brightness, e.g. `\.\DISPLAY1`. `None` while the
+    /// feature is off or the platform cannot tell.
+    pub lit_displays: RwLock<Option<HashSet<String>>>,
 }
 
 impl SharedState {
@@ -83,7 +98,7 @@ impl SharedState {
             weather_forecast: RwLock::new(Vec::new()),
             current_cloud_cover: RwLock::new(0.0),
             base_targets: RwLock::new(HashMap::new()),
-            active_display: RwLock::new(None),
+            lit_displays: RwLock::new(None),
         }
     }
 

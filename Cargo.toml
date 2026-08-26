@@ -1,6 +1,6 @@
 [package]
 name = "sunrise-brightness"
-version = "3.8.0"
+version = "3.9.0"
 edition = "2024"
 description = "Adjusts screen brightness based on sunrise/sunset - with system tray, curve editor, weather adaptation, and per-monitor support"
 license = "MIT"
@@ -13,7 +13,7 @@ solar-positioning = { version = "0.5.2", features = ["chrono"] }
 reqwest = { version = "0.13.4", features = ["blocking", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "1.1.2"
+toml = "1.1.4"
 chrono = "0.4"
 directories = "6"
 auto-launch = "0.6.0"
@@ -21,6 +21,7 @@ anyhow = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
+x11rb = { version = "0.13", features = ["randr"] }
 
 [profile.release]
 opt-level = "z"

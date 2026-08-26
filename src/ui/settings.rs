@@ -1,6 +1,7 @@
 use eframe::egui;
 
 use super::SettingsApp;
+use crate::config::DimMode;
 
 impl SettingsApp {
     pub(crate) fn draw_settings(&mut self, ui: &mut egui::Ui) -> (bool, bool) {
@@ -64,6 +65,15 @@ impl SettingsApp {
                 ui.end_row();
 
                 if self.dim_inactive {
+                    ui.label("Dim which screens:");
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut self.dim_mode, DimMode::Empty, "Empty")
+                            .on_hover_text("Only screens showing no window at all");
+                        ui.selectable_value(&mut self.dim_mode, DimMode::Focused, "Unfocused")
+                            .on_hover_text("Every screen but the one holding the focused window");
+                    });
+                    ui.end_row();
+
                     ui.label("Inactive level:");
                     let mut pct = (self.dim_inactive_factor * 100.0) as i32;
                     ui.add(egui::Slider::new(&mut pct, 0..=100).suffix(" %"));
