@@ -1,5 +1,6 @@
 use brightness::blocking::{Brightness, brightness_devices};
 use chrono::Local;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -7,17 +8,37 @@ use std::time::{Duration, Instant};
 
 use crate::config::{Config, SharedState};
 use crate::curve;
+use crate::inactive;
 use crate::solar::{self, SunTimes};
 use crate::updater;
 use crate::weather;
 
-fn set_all_displays(target: u32) {
+fn set_all_displays(target: u32, config: &Config, active: &Option<String>) {
     for dev in brightness_devices().flatten() {
-        let _ = dev.set(target);
+        let name = dev.device_name().unwrap_or_default();
+        let factor = inactive::dim_factor(&name, config, active);
+        let _ = dev.set((target as f64 * factor).round() as u32);
     }
 }
 
-fn fade_brightness(from: u32, to: u32) {
+/// Re-pushes the last computed targets through the current dim factor.
+/// Called when the foreground window moves to another monitor.
+pub fn reapply(state: &SharedState) {
+    let config = state.config.read().unwrap().clone();
+    let targets = state.base_targets.read().unwrap().clone();
+    let active = state.active_display.read().unwrap().clone();
+
+    for dev in brightness_devices().flatten() {
+        let name = dev.device_name().unwrap_or_default();
+        let Some(&base) = targets.get(&name) else {
+            continue;
+        };
+        let factor = inactive::dim_factor(&name, &config, &active);
+        let _ = dev.set((base as f64 * factor).round() as u32);
+    }
+}
+
+fn fade_brightness(from: u32, to: u32, config: &Config, active: &Option<String>) {
     let duration = Duration::from_millis(3000);
     let start = Instant::now();
 
@@ -28,7 +49,7 @@ fn fade_brightness(from: u32, to: u32) {
         let eased = t * t * (3.0 - 2.0 * t);
 
         let value = from as f32 + (to as f32 - from as f32) * eased;
-        set_all_displays(value.round() as u32);
+        set_all_displays(value.round() as u32, config, active);
 
         if t >= 1.0 {
             break;
@@ -157,15 +178,19 @@ fn apply_brightness(
     let base = config.global_curve.evaluate(progress);
     let global_target = (base * weather_factor).clamp(0.0, 100.0) as u32;
 
+    let active = state.active_display.read().unwrap().clone();
+
     if config.monitors.is_empty() {
+        let names = curve::list_display_names();
+        *state.base_targets.write().unwrap() =
+            names.into_iter().map(|n| (n, global_target)).collect();
+
         let current = state.current_brightness.load(Ordering::Relaxed);
         if current != global_target {
-            fade_brightness(current, global_target);
-            state
-                .current_brightness
-                .store(global_target, Ordering::Relaxed);
+            fade_brightness(current, global_target, config, &active);
         }
     } else {
+        let mut targets = HashMap::new();
         for dev in brightness_devices().flatten() {
             let name = dev.device_name().unwrap_or_default();
             let target = config
@@ -176,11 +201,15 @@ fn apply_brightness(
                     m.evaluate(progress, &config.global_curve)
                         .map(|v| (v * weather_factor).clamp(0.0, 100.0))
                 })
-                .unwrap_or(global_target as f64);
-            let _ = dev.set(target as u32);
+                .unwrap_or(global_target as f64) as u32;
+            let factor = inactive::dim_factor(&name, config, &active);
+            let _ = dev.set((target as f64 * factor).round() as u32);
+            targets.insert(name, target);
         }
-        state
-            .current_brightness
-            .store(global_target, Ordering::Relaxed);
+        *state.base_targets.write().unwrap() = targets;
     }
+
+    state
+        .current_brightness
+        .store(global_target, Ordering::Relaxed);
 }

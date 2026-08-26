@@ -25,6 +25,8 @@ pub struct SettingsApp {
     pub(crate) start_on_startup: bool,
     pub(crate) weather_adaptive: bool,
     pub(crate) cloud_attenuation: f64,
+    pub(crate) dim_inactive: bool,
+    pub(crate) dim_inactive_factor: f64,
     pub(crate) global_curve: BrightnessCurve,
     pub(crate) monitor_overrides: Vec<MonitorOverride>,
 
@@ -53,6 +55,8 @@ impl SettingsApp {
             start_on_startup: config.start_on_startup,
             weather_adaptive: config.weather_adaptive,
             cloud_attenuation: config.cloud_attenuation,
+            dim_inactive: config.dim_inactive,
+            dim_inactive_factor: config.dim_inactive_factor,
             global_curve: config.global_curve,
             monitor_overrides: config.monitors,
             active_tab: 0,
@@ -68,6 +72,8 @@ impl SettingsApp {
         self.start_on_startup = cfg.start_on_startup;
         self.weather_adaptive = cfg.weather_adaptive;
         self.cloud_attenuation = cfg.cloud_attenuation;
+        self.dim_inactive = cfg.dim_inactive;
+        self.dim_inactive_factor = cfg.dim_inactive_factor;
         self.global_curve = cfg.global_curve;
         self.monitor_overrides = cfg.monitors;
         self.active_tab = 0;
@@ -82,6 +88,8 @@ impl SettingsApp {
             start_on_startup: self.start_on_startup,
             weather_adaptive: self.weather_adaptive,
             cloud_attenuation: self.cloud_attenuation,
+            dim_inactive: self.dim_inactive,
+            dim_inactive_factor: self.dim_inactive_factor,
             global_curve: self.global_curve.clone(),
             monitors: self.monitor_overrides.clone(),
         };

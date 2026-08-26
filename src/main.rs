@@ -3,6 +3,7 @@
 mod brightness;
 mod config;
 mod curve;
+mod inactive;
 mod solar;
 mod ui;
 mod updater;
@@ -25,6 +26,9 @@ fn main() -> Result<()> {
 
     let state_bg = Arc::clone(&state);
     std::thread::spawn(move || brightness::run_loop(state_bg));
+
+    let state_dim = Arc::clone(&state);
+    std::thread::spawn(move || inactive::run_loop(state_dim));
 
     let tray_menu = Menu::new();
     let item_settings = MenuItem::new("Settings", true, None);

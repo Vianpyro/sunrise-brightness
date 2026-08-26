@@ -58,6 +58,19 @@ impl SettingsApp {
                     .on_hover_text("Dim brightness when cloudy/rainy (Open-Meteo, no API key)");
                 ui.end_row();
 
+                ui.label("Dim inactive screens:");
+                ui.checkbox(&mut self.dim_inactive, "")
+                    .on_hover_text("Dim monitors that don't hold the focused window");
+                ui.end_row();
+
+                if self.dim_inactive {
+                    ui.label("Inactive level:");
+                    let mut pct = (self.dim_inactive_factor * 100.0) as i32;
+                    ui.add(egui::Slider::new(&mut pct, 0..=100).suffix(" %"));
+                    self.dim_inactive_factor = pct as f64 / 100.0;
+                    ui.end_row();
+                }
+
                 if self.weather_adaptive {
                     ui.label("Cloud dimming:");
                     let mut att = (self.cloud_attenuation * 100.0) as i32;

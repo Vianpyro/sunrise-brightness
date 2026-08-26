@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::RwLock;
@@ -21,6 +22,8 @@ pub struct Config {
     pub monitors: Vec<MonitorOverride>,
     pub weather_adaptive: bool,
     pub cloud_attenuation: f64,
+    pub dim_inactive: bool,
+    pub dim_inactive_factor: f64,
 }
 
 impl Default for Config {
@@ -34,6 +37,8 @@ impl Default for Config {
             monitors: Vec::new(),
             weather_adaptive: false,
             cloud_attenuation: 0.5,
+            dim_inactive: false,
+            dim_inactive_factor: 0.3,
         }
     }
 }
@@ -53,6 +58,11 @@ pub struct SharedState {
     pub location_str: RwLock<String>,
     pub weather_forecast: RwLock<Vec<(f64, f64)>>,
     pub current_cloud_cover: RwLock<f64>,
+    /// Brightness each physical monitor would get if it were active, before the
+    /// inactive-dim factor. Written by the sun loop, read when re-pushing.
+    pub base_targets: RwLock<HashMap<String, u32>>,
+    /// Display holding the foreground window, e.g. `\.\DISPLAY1`.
+    pub active_display: RwLock<Option<String>>,
 }
 
 impl SharedState {
@@ -72,6 +82,8 @@ impl SharedState {
             location_str: RwLock::new(String::new()),
             weather_forecast: RwLock::new(Vec::new()),
             current_cloud_cover: RwLock::new(0.0),
+            base_targets: RwLock::new(HashMap::new()),
+            active_display: RwLock::new(None),
         }
     }
 
