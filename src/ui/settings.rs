@@ -74,10 +74,13 @@ impl SettingsApp {
                     });
                     ui.end_row();
 
-                    ui.label("Inactive level:");
-                    let mut pct = (self.dim_inactive_factor * 100.0) as i32;
-                    ui.add(egui::Slider::new(&mut pct, 0..=100).suffix(" %"));
-                    self.dim_inactive_factor = pct as f64 / 100.0;
+                    // Expressed as how much brightness to cut, so it reads the
+                    // same way round as "Cloud dimming" just below it.
+                    ui.label("Inactive dimming:");
+                    let mut pct = ((1.0 - self.dim_inactive_factor) * 100.0).round() as i32;
+                    ui.add(egui::Slider::new(&mut pct, 0..=100).suffix(" %"))
+                        .on_hover_text("How much to cut brightness on an idle screen (0% = off)");
+                    self.dim_inactive_factor = 1.0 - pct as f64 / 100.0;
                     ui.end_row();
                 }
 

@@ -251,7 +251,6 @@ mod win {
     }
 
     /// Displays carrying at least one real, user-visible window.
-
     fn occupied_displays() -> Option<HashSet<String>> {
         let mut found = HashSet::new();
         let ok = unsafe { EnumWindows(collect, &mut found as *mut HashSet<String> as isize) };
