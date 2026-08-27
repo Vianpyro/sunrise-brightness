@@ -22,8 +22,10 @@ use std::time::Duration;
 use crate::config::{Config, DimMode, SharedState};
 
 /// How often the lit displays are sampled. The user-visible latency to restore a
-/// monitor is this plus one round-trip to the panel (~100 ms over DDC/CI).
-const POLL: Duration = Duration::from_millis(500);
+/// monitor is this plus one round-trip to the panel (~100 ms over DDC/CI), so
+/// this is set to keep the worst case comfortably inside the 3 s a user will
+/// tolerate while still halving the wake-ups a 500 ms poll would cost.
+const POLL: Duration = Duration::from_secs(1);
 
 /// Display keys that should stay at full brightness.
 ///

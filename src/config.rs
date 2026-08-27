@@ -78,6 +78,9 @@ pub struct SharedState {
     /// Displays kept at full brightness, e.g. `\.\DISPLAY1`. `None` while the
     /// feature is off or the platform cannot tell.
     pub lit_displays: RwLock<Option<HashSet<String>>>,
+    /// Last value actually written to each brightness device, so a tick that
+    /// computes the same number again can skip the write. See `brightness::push`.
+    pub last_written: RwLock<HashMap<String, u32>>,
 }
 
 impl SharedState {
@@ -99,6 +102,7 @@ impl SharedState {
             current_cloud_cover: RwLock::new(0.0),
             base_targets: RwLock::new(HashMap::new()),
             lit_displays: RwLock::new(None),
+            last_written: RwLock::new(HashMap::new()),
         }
     }
 
@@ -118,10 +122,22 @@ pub fn config_path() -> PathBuf {
 
 pub fn load_config() -> Config {
     let path = config_path();
-    match fs::read_to_string(&path) {
+    let mut config = match fs::read_to_string(&path) {
         Ok(content) => toml::from_str(&content).unwrap_or_default(),
         Err(_) => Config::default(),
+    };
+
+    // The spline tangents are `#[serde(skip)]`, and a curve without them rebuilds
+    // them on every `evaluate()` — 16x the cost, several hundred times per frame
+    // in the editor. Build them once here instead.
+    config.global_curve.recompute_tangents();
+    for monitor in &mut config.monitors {
+        if let Some(curve) = &mut monitor.curve {
+            curve.recompute_tangents();
+        }
     }
+
+    config
 }
 
 pub fn save_config(config: &Config) -> Result<()> {

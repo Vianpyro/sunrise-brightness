@@ -12,9 +12,10 @@ mod weather;
 use anyhow::Result;
 use eframe::egui;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tray_icon::{
-    TrayIconBuilder,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    TrayIconBuilder, TrayIconEvent,
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
 fn main() -> Result<()> {
@@ -43,11 +44,15 @@ fn main() -> Result<()> {
         .with_icon(sun_icon())
         .build()?;
 
-    let app = ui::SettingsApp::new(
-        Arc::clone(&state),
-        item_settings.id().clone(),
-        item_quit.id().clone(),
-    );
+    // Nobody reads tray icon events, and the default sink is an unbounded
+    // channel, so hovering the icon would grow it forever. Drop them instead.
+    TrayIconEvent::set_event_handler(Some(|_| {}));
+
+    let menu = Arc::new(ui::MenuFlags::default());
+    let app = ui::SettingsApp::new(Arc::clone(&state), Arc::clone(&menu));
+
+    let settings_id = item_settings.id().clone();
+    let quit_id = item_quit.id().clone();
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -61,7 +66,20 @@ fn main() -> Result<()> {
     eframe::run_native(
         "Sunrise Brightness",
         native_options,
-        Box::new(|_cc| Ok(Box::new(app))),
+        Box::new(move |cc| {
+            // Waking the event loop on a menu click is what lets the app ask for
+            // no periodic repaint at all while it sits hidden in the tray.
+            let ctx = cc.egui_ctx.clone();
+            MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+                if event.id == settings_id {
+                    menu.open_settings.store(true, Ordering::Relaxed);
+                } else if event.id == quit_id {
+                    menu.quit.store(true, Ordering::Relaxed);
+                }
+                ctx.request_repaint();
+            }));
+            Ok(Box::new(app))
+        }),
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
 

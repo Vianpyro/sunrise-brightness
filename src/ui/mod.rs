@@ -5,17 +5,15 @@ mod title_bar;
 
 use eframe::egui;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tray_icon::menu::{MenuEvent, MenuId};
 
 use crate::config::{self, DimMode, SharedState};
 use crate::curve::{BrightnessCurve, MonitorOverride};
 
 pub struct SettingsApp {
     pub(crate) state: Arc<SharedState>,
-    pub(crate) settings_menu_id: MenuId,
-    pub(crate) quit_menu_id: MenuId,
+    pub(crate) menu: Arc<MenuFlags>,
     pub(crate) visible: bool,
     pub(crate) first_frame: bool,
 
@@ -36,12 +34,11 @@ pub struct SettingsApp {
 }
 
 impl SettingsApp {
-    pub fn new(state: Arc<SharedState>, settings_menu_id: MenuId, quit_menu_id: MenuId) -> Self {
+    pub fn new(state: Arc<SharedState>, menu: Arc<MenuFlags>) -> Self {
         let config = state.config.read().unwrap().clone();
         Self {
             state,
-            settings_menu_id,
-            quit_menu_id,
+            menu,
             visible: cfg!(target_os = "linux"),
             first_frame: true,
             lat_input: config
@@ -145,10 +142,20 @@ impl SettingsApp {
     }
 }
 
-impl eframe::App for SettingsApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
+/// Tray menu clicks, parked by the menu event handler until the next egui pass.
+///
+/// The handler runs on whatever thread the platform delivers menu events on, so
+/// it only sets a flag and wakes the event loop; the work happens in `logic`.
+#[derive(Default)]
+pub struct MenuFlags {
+    pub open_settings: AtomicBool,
+    pub quit: AtomicBool,
+}
 
+impl eframe::App for SettingsApp {
+    /// Runs whether or not the window is shown, so everything that must keep
+    /// working while hidden lives here rather than in `ui`.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.first_frame {
             self.first_frame = false;
             // On Windows, hide to tray on startup. On Linux, the tray
@@ -157,15 +164,15 @@ impl eframe::App for SettingsApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
 
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if event.id == self.settings_menu_id {
-                self.load_fields_from_config();
-                self.visible = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            } else if event.id == self.quit_menu_id {
-                std::process::exit(0);
-            }
+        if self.menu.quit.load(Ordering::Relaxed) {
+            std::process::exit(0);
+        }
+
+        if self.menu.open_settings.swap(false, Ordering::Relaxed) {
+            self.load_fields_from_config();
+            self.visible = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
 
         if ctx.input(|i| i.viewport().close_requested()) {
@@ -179,10 +186,19 @@ impl eframe::App for SettingsApp {
             }
         }
 
-        ctx.request_repaint_after(Duration::from_millis(250));
+        // Only while the window is on screen, so the status readouts stay live.
+        // Hidden, nothing repaints and the event loop sleeps until the tray or
+        // the window manager wakes it.
+        if self.visible {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if !self.visible {
             return;
         }
+        let ctx = ui.ctx().clone();
 
         let mut should_close = false;
 
