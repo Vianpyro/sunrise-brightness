@@ -1,5 +1,5 @@
 use brightness::blocking::{Brightness, brightness_devices};
-use chrono::Local;
+use chrono::{Local, NaiveDate};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -25,6 +25,15 @@ const FADE_STEPS: u32 = 8;
 /// stale on its own or such a display would keep the wrong value until the curve
 /// happened to move.
 const REASSERT_AFTER: Duration = Duration::from_secs(3600);
+
+/// Bounds for backing off a failed refetch.
+///
+/// Neither failure mode clears up by the next tick: no network stays no network,
+/// and a polar night lasts months. Retrying every `update_interval_secs` would
+/// mean an HTTP geolocation request every minute for as long as it lasts, which
+/// costs more than everything else this loop does put together.
+const RETRY_MIN: Duration = Duration::from_secs(60);
+const RETRY_MAX: Duration = Duration::from_secs(3600);
 
 /// Pushes `value` to `dev` unless that is already the last thing we sent it.
 ///
@@ -106,8 +115,16 @@ fn fade_brightness(
 pub fn run_loop(state: Arc<SharedState>) {
     updater::spawn(Arc::clone(&state));
 
-    let mut sun_times: Option<SunTimes> = None;
+    // Sun times depend only on the date and the coordinates, so they are worth
+    // recomputing exactly once a day and not once a tick. Until the first
+    // successful computation this is a plain 6:00-18:00 day, so the curve still
+    // runs on a machine that cannot reach the network.
+    let mut sun_times = SunTimes::fallback();
+    let mut computed_for: Option<NaiveDate> = None;
     let mut location: Option<(f64, f64)> = None;
+
+    let mut retry_at: Option<Instant> = None;
+    let mut backoff = RETRY_MIN;
     let mut last_reassert = Instant::now();
 
     loop {
@@ -118,60 +135,61 @@ pub fn run_loop(state: Arc<SharedState>) {
             state.last_written.write().unwrap().clear();
         }
 
-        if state.needs_refetch.swap(false, Ordering::Relaxed)
-            || sun_times.is_none()
-            || location.is_none()
-        {
-            let monitors = curve::list_display_names();
-            *state.detected_monitors.write().unwrap() = monitors;
+        let today = Local::now().date_naive();
+        let forced = state.needs_refetch.swap(false, Ordering::Relaxed);
+        let stale = computed_for != Some(today) || location.is_none();
+        let due = retry_at.is_none_or(|at| Instant::now() >= at);
 
-            let resolved = resolve_location(&config, &state);
-            match resolved {
-                Some((lat, lon)) => {
-                    location = Some((lat, lon));
+        if forced || (stale && due) {
+            if forced {
+                // The user just changed something, so start over from a short wait.
+                backoff = RETRY_MIN;
+            }
 
-                    state.set_status("Computing sun times...");
-                    match solar::compute_sun_times(lat, lon) {
-                        Some(st) => {
-                            *state.sunrise_str.write().unwrap() =
-                                st.sunrise.format("%H:%M").to_string();
-                            *state.noon_str.write().unwrap() =
-                                st.transit.format("%H:%M").to_string();
-                            *state.sunset_str.write().unwrap() =
-                                st.sunset.format("%H:%M").to_string();
+            *state.detected_monitors.write().unwrap() = curve::list_display_names();
 
-                            if config.weather_adaptive
-                                && let Some(forecast) =
-                                    weather::fetch_forecast(lat, lon, st.sunrise, st.sunset)
-                            {
-                                *state.weather_forecast.write().unwrap() = forecast;
-                            }
+            // Keep the last known coordinates if the lookup fails: the sun-time
+            // maths is offline, so yesterday's location still gives today's real
+            // sunrise, and it saves retrying a lookup we no longer need.
+            if let Some(resolved) = resolve_location(&config, &state) {
+                location = Some(resolved);
+            }
 
-                            sun_times = Some(st);
-                            state.set_status("Running");
-                        }
-                        None => {
-                            state.set_status("Polar night — no sunrise today");
-                            thread::sleep(Duration::from_secs(config.update_interval_secs));
-                            continue;
-                        }
+            let computed = location.and_then(|(lat, lon)| {
+                state.set_status("Computing sun times...");
+                solar::compute_sun_times(lat, lon).map(|st| (st, lat, lon))
+            });
+
+            match computed {
+                Some((st, lat, lon)) => {
+                    *state.sunrise_str.write().unwrap() = st.sunrise.format("%H:%M").to_string();
+                    *state.noon_str.write().unwrap() = st.transit.format("%H:%M").to_string();
+                    *state.sunset_str.write().unwrap() = st.sunset.format("%H:%M").to_string();
+
+                    if config.weather_adaptive
+                        && let Some(forecast) =
+                            weather::fetch_forecast(lat, lon, st.sunrise, st.sunset)
+                    {
+                        *state.weather_forecast.write().unwrap() = forecast;
                     }
+
+                    sun_times = st;
+                    computed_for = Some(today);
+                    retry_at = None;
+                    backoff = RETRY_MIN;
+                    state.set_status("Running");
                 }
                 None => {
-                    location = None;
-                    if let Some(ref st) = sun_times {
-                        apply_brightness(&config, &state, st, None);
+                    if location.is_some() {
+                        state.set_status("Polar night — no sunrise today");
                     }
-                    thread::sleep(Duration::from_secs(config.update_interval_secs));
-                    continue;
+                    retry_at = Some(Instant::now() + backoff);
+                    backoff = (backoff * 2).min(RETRY_MAX);
                 }
             }
         }
 
-        if let Some(ref st) = sun_times {
-            apply_brightness(&config, &state, st, location);
-        }
-
+        apply_brightness(&config, &state, &sun_times, location);
         thread::sleep(Duration::from_secs(config.update_interval_secs));
     }
 }

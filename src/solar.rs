@@ -38,6 +38,19 @@ pub struct SunTimes {
     pub sunset: NaiveTime,
 }
 
+impl SunTimes {
+    /// Plain 6:00 / 12:00 / 18:00, for when we have no location to compute from.
+    /// Wrong by up to a few hours, but it keeps the curve moving, which beats
+    /// leaving the screens wherever they happened to be.
+    pub fn fallback() -> Self {
+        Self {
+            sunrise: NaiveTime::from_hms_opt(6, 0, 0).expect("6:00 is a valid time"),
+            transit: NaiveTime::from_hms_opt(12, 0, 0).expect("12:00 is a valid time"),
+            sunset: NaiveTime::from_hms_opt(18, 0, 0).expect("18:00 is a valid time"),
+        }
+    }
+}
+
 pub fn compute_sun_times(lat: f64, lon: f64) -> Option<SunTimes> {
     let now: DateTime<FixedOffset> = Local::now().fixed_offset();
     let today_start = now.date_naive().and_hms_opt(0, 0, 0)?;
