@@ -4023,9 +4023,9 @@ dependencies = [
 
 [[package]]
 name = "solar-positioning"
-version = "0.5.3"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1eed47102ac6e9248d3480c93a9efdff070b3e33e0680173f9b722f826b16e9"
+checksum = "91d6872cbbd3f5ae24ef8e5f759b235a080d3592c8ddbc0c38c8985b19f6c34a"
 dependencies = [
  "chrono",
 ]
