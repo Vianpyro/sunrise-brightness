@@ -13,9 +13,9 @@ eframe = { version = "0.36.0", default-features = false, features = [
     "wayland",
     "x11",
 ] }
-tray-icon = "0.25.1"
+tray-icon = "0.26.0"
 brightness = { version = "0.8", features = ["blocking"] }
-solar-positioning = { version = "0.6.1", features = ["chrono"] }
+solar-positioning = { version = "0.7.0", features = ["chrono"] }
 reqwest = { version = "0.13.4", features = ["blocking", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
