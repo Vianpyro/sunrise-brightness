@@ -41,6 +41,35 @@ sudo install -m 755 sunrise-brightness-linux /usr/local/bin/sunrise-brightness
 sunrise-brightness
 ```
 
+### NixOS
+
+The repository is a flake. Add it as an input and enable the module:
+
+```nix
+# flake.nix
+inputs.sunrise-brightness = {
+  url = "github:Vianpyro/sunrise-brightness";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+
+# in your NixOS configuration (modules = [ inputs.sunrise-brightness.nixosModules.default … ])
+programs.sunrise-brightness.enable = true;
+```
+
+The module installs the app and sets `hardware.i2c.enable = true`. That is what makes external monitors work, as explained below. To try it without installing anything, run `nix run github:Vianpyro/sunrise-brightness`. Turn on "Start on startup" only once the app is installed: the autostart entry points at your profile's stable path rather than the `/nix/store` path, so it survives upgrades and garbage collection.
+
+### External monitors (DDC/CI) on Linux
+
+Laptop panels are driven through `/sys/class/backlight`. External monitors are driven over DDC/CI, so the app changes the monitor's real backlight instead of darkening the image. This needs:
+
+- the `i2c-dev` kernel module (`sudo modprobe i2c-dev`, made permanent through `/etc/modules-load.d/`);
+- read/write access to `/dev/i2c-*`. Usually that means joining the `i2c` group (`sudo usermod -aG i2c $USER`, then log in again). On NixOS, `hardware.i2c.enable` grants it to the logged-in user automatically;
+- DDC/CI enabled in the monitor's on-screen menu (it usually is by default).
+
+`ddcutil detect` shows which monitors answer. Only adapters that can carry a display are probed: motherboard SMBus is never touched.
+
+**KDE Plasma:** Plasma 6 also drives DDC/CI monitors through its own brightness slider. Both work, but each overwrites the other's value. If you want Sunrise Brightness to be the only one in charge, turn off DDC/CI for those screens in Plasma (`allowDdcCi` in `~/.config/kwinoutputconfig.json`).
+
 ### Windows
 
 Download `sunrise-brightness-windows.exe` from the [latest release](https://github.com/Vianpyro/sunrise-brightness/releases/latest) and run it. No installation needed, the binary is self-contained.
@@ -75,6 +104,8 @@ brightness = 0.0
 If `latitude`/`longitude` are omitted, your location is auto-detected from your IP address.
 
 ## Building from source
+
+With Nix, `nix develop` gives a shell with the toolchain and every library, and `nix build` builds the package. Otherwise:
 
 ```bash
 # Linux: install build dependencies

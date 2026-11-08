@@ -3,6 +3,7 @@
 mod brightness;
 mod config;
 mod curve;
+mod display;
 mod inactive;
 mod solar;
 mod ui;

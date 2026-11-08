@@ -520,11 +520,7 @@ pub fn clean_display_name(raw: &str) -> String {
 }
 
 pub fn list_display_names() -> Vec<String> {
-    use brightness::blocking::{Brightness, brightness_devices};
-    brightness_devices()
-        .flatten()
-        .filter_map(|dev| dev.device_name().ok())
-        .collect()
+    crate::display::names()
 }
 
 #[cfg(test)]

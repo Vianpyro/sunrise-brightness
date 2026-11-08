@@ -10,9 +10,11 @@
 //!
 //! - Windows drives every monitor over DDC/CI, so a key is one logical display
 //!   (`\\.\DISPLAY1`) and each screen is judged separately.
-//! - Linux only ever exposes the built-in laptop panel through
-//!   `/sys/class/backlight`, so there is a single key, [`x11::BUILTIN`]. The
-//!   useful case is a docked laptop whose lid is open but unused.
+//! - Linux drives the built-in laptop panel through `/sys/class/backlight`,
+//!   which has a single key, [`x11::BUILTIN`]. The useful case is a docked
+//!   laptop whose lid is open but unused. External monitors driven over DDC/CI
+//!   (see `crate::display`) have no key: the X11 detector only reasons about
+//!   the built-in panel, so they are never dimmed by this module.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -40,7 +42,13 @@ pub fn dim_factor(device_name: &str, config: &Config, lit: &LitDisplays) -> f64 
         return 1.0;
     };
 
-    if !config.dim_inactive || lit.contains(&display_key(device_name)) {
+    // A device the detector cannot place is left alone, for the same reason a
+    // `None` set is: guessing wrong would dim a screen someone is using.
+    let Some(key) = display_key(device_name) else {
+        return 1.0;
+    };
+
+    if !config.dim_inactive || lit.contains(&key) {
         1.0
     } else {
         config.dim_inactive_factor.clamp(0.0, 1.0)
@@ -108,27 +116,29 @@ impl Detector {
 }
 
 /// Groups brightness devices that share one screen, in the same vocabulary the
-/// platform backend uses to report lit displays.
+/// platform backend uses to report lit displays. `None` if the backend cannot
+/// tell whether this device's screen is lit.
 #[cfg(target_os = "windows")]
-fn display_key(device_name: &str) -> String {
+fn display_key(device_name: &str) -> Option<String> {
     // `\\.\DISPLAY1\Monitor0` is one physical monitor on logical display
     // `\\.\DISPLAY1`. Splitting beats a prefix test, which would let
     // `DISPLAY1` swallow `DISPLAY10`.
-    match device_name.rsplit_once('\\') {
+    Some(match device_name.rsplit_once('\\') {
         Some((display, _monitor)) => display.to_string(),
         None => device_name.to_string(),
-    }
+    })
 }
 
-/// Every `/sys/class/backlight` entry is the built-in panel.
+/// Every `/sys/class/backlight` entry is the built-in panel. DDC/CI monitors are
+/// external, and the X11 detector does not report on those.
 #[cfg(target_os = "linux")]
-fn display_key(_device_name: &str) -> String {
-    x11::BUILTIN.to_string()
+fn display_key(device_name: &str) -> Option<String> {
+    (!crate::display::Display::is_ddc(device_name)).then(|| x11::BUILTIN.to_string())
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-fn display_key(device_name: &str) -> String {
-    device_name.to_string()
+fn display_key(device_name: &str) -> Option<String> {
+    Some(device_name.to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -554,7 +564,7 @@ mod tests {
     }
 
     fn lit(devices: &[&str]) -> LitDisplays {
-        Some(devices.iter().map(|d| display_key(d)).collect())
+        Some(devices.iter().filter_map(|d| display_key(d)).collect())
     }
 
     #[test]
@@ -576,7 +586,10 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn groups_monitors_by_logical_display_without_prefix_confusion() {
-        assert_eq!(display_key(r"\\.\DISPLAY1\Monitor0"), r"\\.\DISPLAY1");
+        assert_eq!(
+            display_key(r"\\.\DISPLAY1\Monitor0").as_deref(),
+            Some(r"\\.\DISPLAY1")
+        );
         assert_ne!(
             display_key(r"\\.\DISPLAY10\Monitor0"),
             display_key(r"\\.\DISPLAY1\Monitor0")

@@ -1,4 +1,4 @@
-use brightness::blocking::{Brightness, brightness_devices};
+use crate::display::{self, Display};
 use chrono::{Local, NaiveDate};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,7 +15,8 @@ use crate::weather;
 
 const FADE_DURATION: Duration = Duration::from_secs(3);
 
-/// A DDC/CI write blocks for ~100 ms per monitor, so more steps than this cannot
+/// A DDC/CI write (Windows, or Linux external monitors through
+/// [`display`]) blocks for ~50-100 ms per monitor, so more steps than this cannot
 /// fit inside [`FADE_DURATION`] anyway and would only add I2C traffic.
 const FADE_STEPS: u32 = 8;
 
@@ -43,11 +44,12 @@ const RETRY_MAX: Duration = Duration::from_secs(3600);
 /// on the panel. The cache means a brightness set by the monitor's own buttons
 /// now survives until the target actually moves, instead of being overwritten
 /// on the next tick.
-fn push<D: Brightness>(dev: &D, name: &str, value: u32, state: &SharedState) {
+fn push(dev: &Display, value: u32, state: &SharedState) {
+    let name = dev.name();
     if state.last_written.read().unwrap().get(name) == Some(&value) {
         return;
     }
-    if dev.set(value).is_ok() {
+    if dev.set(value) {
         state
             .last_written
             .write()
@@ -63,13 +65,12 @@ pub fn reapply(state: &SharedState) {
     let targets = state.base_targets.read().unwrap().clone();
     let lit = state.lit_displays.read().unwrap().clone();
 
-    for dev in brightness_devices().flatten() {
-        let name = dev.device_name().unwrap_or_default();
-        let Some(&base) = targets.get(&name) else {
+    for dev in display::devices() {
+        let Some(&base) = targets.get(dev.name()) else {
             continue;
         };
-        let factor = inactive::dim_factor(&name, &config, &lit);
-        push(&dev, &name, (base as f64 * factor).round() as u32, state);
+        let factor = inactive::dim_factor(dev.name(), &config, &lit);
+        push(&dev, (base as f64 * factor).round() as u32, state);
     }
 }
 
@@ -82,13 +83,7 @@ fn fade_brightness(
 ) {
     // Enumerating costs ~2.5 ms and the set of monitors cannot change mid-fade,
     // so do it once rather than once per step.
-    let devices: Vec<(_, String)> = brightness_devices()
-        .flatten()
-        .map(|dev| {
-            let name = dev.device_name().unwrap_or_default();
-            (dev, name)
-        })
-        .collect();
+    let devices = display::devices();
 
     let steps = to.abs_diff(from).clamp(1, FADE_STEPS);
     let slot = FADE_DURATION / steps;
@@ -100,9 +95,9 @@ fn fade_brightness(
         let eased = t * t * (3.0 - 2.0 * t);
         let value = (from as f32 + (to as f32 - from as f32) * eased).round() as u32;
 
-        for (dev, name) in &devices {
-            let factor = inactive::dim_factor(name, config, lit);
-            push(dev, name, (value as f64 * factor).round() as u32, state);
+        for dev in &devices {
+            let factor = inactive::dim_factor(dev.name(), config, lit);
+            push(dev, (value as f64 * factor).round() as u32, state);
         }
 
         // The writes usually overrun the slot on their own; only sleep if not.
@@ -130,8 +125,17 @@ pub fn run_loop(state: Arc<SharedState>) {
     loop {
         let config = state.config.read().unwrap().clone();
 
-        if last_reassert.elapsed() >= REASSERT_AFTER {
+        let reassert = last_reassert.elapsed() >= REASSERT_AFTER;
+        if reassert {
             last_reassert = Instant::now();
+            state.last_written.write().unwrap().clear();
+        }
+
+        // Picks up DDC/CI monitors that were plugged in, unplugged or failed a
+        // write. A newly found monitor starts at its own brightness, so drop the
+        // write cache to make sure this tick reaches it.
+        if display::refresh(reassert) {
+            *state.detected_monitors.write().unwrap() = curve::list_display_names();
             state.last_written.write().unwrap().clear();
         }
 
@@ -256,11 +260,19 @@ fn apply_brightness(
         let current = state.current_brightness.load(Ordering::Relaxed);
         if current != global_target {
             fade_brightness(current, global_target, config, &lit, state);
+        } else {
+            // Nothing to fade, but a monitor that appeared since the last write
+            // (or whose cache entry was just dropped) still needs the value.
+            // `push` skips everyone already there.
+            for dev in display::devices() {
+                let factor = inactive::dim_factor(dev.name(), config, &lit);
+                push(&dev, (global_target as f64 * factor).round() as u32, state);
+            }
         }
     } else {
         let mut targets = HashMap::new();
-        for dev in brightness_devices().flatten() {
-            let name = dev.device_name().unwrap_or_default();
+        for dev in display::devices() {
+            let name = dev.name().to_string();
             let target = config
                 .monitors
                 .iter()
@@ -271,7 +283,7 @@ fn apply_brightness(
                 })
                 .unwrap_or(global_target as f64) as u32;
             let factor = inactive::dim_factor(&name, config, &lit);
-            push(&dev, &name, (target as f64 * factor).round() as u32, state);
+            push(&dev, (target as f64 * factor).round() as u32, state);
             targets.insert(name, target);
         }
         *state.base_targets.write().unwrap() = targets;

@@ -365,8 +365,38 @@ impl SettingsApp {
     }
 }
 
+/// Path to write into the autostart entry.
+///
+/// On Nix, `current_exe()` points inside `/nix/store/<hash>-…`. That path
+/// belongs to one specific build: the next upgrade leaves the entry launching
+/// the old version, and garbage collection then deletes it outright. The
+/// profile symlinks always point at the current build, so prefer those.
+fn autostart_exe() -> anyhow::Result<String> {
+    let exe = std::env::current_exe()?;
+    if !exe.starts_with("/nix/store") {
+        return Ok(exe.to_string_lossy().into_owned());
+    }
+
+    let bin = "bin/sunrise-brightness";
+    let mut candidates = Vec::new();
+    if let Ok(user) = std::env::var("USER") {
+        candidates.push(format!("/etc/profiles/per-user/{user}/{bin}"));
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(format!("{home}/.nix-profile/{bin}"));
+        candidates.push(format!("{home}/.local/state/nix/profile/{bin}"));
+    }
+    candidates.push(format!("/run/current-system/sw/{bin}"));
+
+    Ok(candidates
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())
+        // Not installed in any profile (e.g. `nix run`): leave it to PATH.
+        .unwrap_or_else(|| "sunrise-brightness".into()))
+}
+
 fn toggle_autostart(enable: bool) -> anyhow::Result<()> {
-    let exe = std::env::current_exe()?.to_string_lossy().to_string();
+    let exe = autostart_exe()?;
 
     let launcher = auto_launch::AutoLaunchBuilder::new()
         .set_app_name("sunrise-brightness")

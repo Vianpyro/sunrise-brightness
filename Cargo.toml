@@ -28,6 +28,8 @@ anyhow = "1"
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
 x11rb = { version = "0.14.0", features = ["randr"] }
+ddc = "0.2"
+ddc-i2c = { version = "0.2.2", features = ["with-linux"] }
 
 [profile.release]
 opt-level = "z"
