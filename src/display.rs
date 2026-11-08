@@ -88,6 +88,7 @@ pub fn refresh(force: bool) -> bool {
 mod ddc {
     use std::fs;
     use std::sync::Mutex;
+    use std::time::{Duration, Instant};
 
     use ddc::{Ddc as _, Edid as _};
     use ddc_i2c::I2cDeviceDdc;
@@ -102,10 +103,38 @@ mod ddc {
     /// same list ddcutil skips.
     const IGNORED_ADAPTERS: [&str; 5] = ["smbus", "soc:i2cdsi", "smu", "mac-io", "u4"];
 
-    struct Monitor {
+    /// Backoff for re-probing a monitor that has an EDID but does not answer
+    /// DDC/CI. Usually it is in standby and wakes up within the hour. If its
+    /// DDC/CI is switched off in the on-screen menu, it never answers, and the
+    /// cap keeps that to one short scan every quarter of an hour.
+    const RETRY_MIN: Duration = Duration::from_secs(30);
+    const RETRY_MAX: Duration = Duration::from_secs(15 * 60);
+
+    struct Monitor<H> {
+        /// Unique display name, what `config.monitors[].name` matches.
         name: String,
-        ddc: I2cDeviceDdc,
+        /// EDID model name (or `i2c-N`), before disambiguation.
+        base: String,
+        serial: Option<String>,
+        bus: u32,
+        /// Identifies the physical monitor on `bus` across rescans.
+        edid: [u8; 128],
+        handle: H,
         max: u16,
+    }
+
+    /// What one I2C bus looked like during a scan.
+    enum Probe<H> {
+        /// No valid EDID: nothing is plugged in, or this is not a display bus.
+        Absent,
+        /// A monitor is there but does not answer DDC/CI. Its EDID EEPROM is
+        /// powered by the GPU and stays readable while the panel itself is in
+        /// DPMS standby, which is exactly when DDC/CI goes quiet.
+        Silent {
+            bus: u32,
+            edid: [u8; 128],
+        },
+        Ready(Monitor<H>),
     }
 
     #[derive(Default)]
@@ -114,7 +143,11 @@ mod ddc {
         dirty: bool,
         /// Snapshot of every DRM connector's status, to notice hotplug cheaply.
         connectors: Vec<(String, String)>,
-        monitors: Vec<Monitor>,
+        monitors: Vec<Monitor<I2cDeviceDdc>>,
+        /// Set while some monitor is `Silent` and not yet known: DPMS wake-ups
+        /// do not change any connector status, so nothing else would bring it in.
+        retry_at: Option<Instant>,
+        retry_delay: Duration,
     }
 
     static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
@@ -147,11 +180,15 @@ mod ddc {
         // DDC/CI over consumer monitors drops the odd transaction; one retry
         // absorbs that without hiding a monitor that is really gone.
         let ok = (0..2).any(|_| {
-            mon.ddc
+            mon.handle
                 .set_vcp_feature(VCP_BRIGHTNESS, value as u16)
                 .is_ok()
         });
         if !ok {
+            // Rescan to tell an unplugged monitor from one in standby. A
+            // monitor in standby is kept (see `merge`). Its failed write is not
+            // cached by `brightness::push`, so the next tick after it wakes up
+            // re-sends the value.
             cache.dirty = true;
         }
         ok
@@ -166,6 +203,7 @@ mod ddc {
                 && !c.dirty
                 && !force
                 && c.connectors == connectors
+                && c.retry_at.is_none_or(|at| Instant::now() < at)
             {
                 return false;
             }
@@ -173,19 +211,77 @@ mod ddc {
 
         // Probe without holding the lock: this takes a while, and the old
         // handles stay usable for writes in the meantime.
-        let monitors = scan();
+        let probes = scan();
 
         let mut guard = CACHE.lock().unwrap();
         let cache = guard.get_or_insert_with(Cache::default);
-        let old: Vec<&str> = cache.monitors.iter().map(|m| m.name.as_str()).collect();
-        let new: Vec<&str> = monitors.iter().map(|m| m.name.as_str()).collect();
-        let changed = old != new;
+        let old = std::mem::take(&mut cache.monitors);
+        let old_names: Vec<String> = old.iter().map(|m| m.name.clone()).collect();
+        let (monitors, pending) = merge(old, probes);
+        let changed = monitors.iter().map(|m| &m.name).ne(old_names.iter());
+
+        if pending {
+            let delay = cache.retry_delay.max(RETRY_MIN);
+            cache.retry_at = Some(Instant::now() + delay);
+            cache.retry_delay = (delay * 2).min(RETRY_MAX);
+        } else {
+            cache.retry_at = None;
+            cache.retry_delay = RETRY_MIN;
+        }
 
         cache.scanned = true;
         cache.dirty = false;
         cache.connectors = connectors;
         cache.monitors = monitors;
         changed
+    }
+
+    /// Combines a fresh scan with what was known before it. Returns the
+    /// monitors to use, and whether a `Silent` monitor is still waiting to be
+    /// learned (so a re-probe should be scheduled).
+    ///
+    /// A known monitor that went `Silent` is kept as is, with the same handle,
+    /// range and name. Dropping it, as an `Option`-returning probe did, made a
+    /// screen in standby disappear until the next hourly rescan, long after it
+    /// had woken up. It is matched by bus *and* full EDID, so a different
+    /// monitor plugged into the same port is never mistaken for it.
+    fn merge<H>(old: Vec<Monitor<H>>, probes: Vec<Probe<H>>) -> (Vec<Monitor<H>>, bool) {
+        let mut old: Vec<Option<Monitor<H>>> = old.into_iter().map(Some).collect();
+        let mut pending = false;
+        let mut out = Vec::new();
+
+        for probe in probes {
+            match probe {
+                Probe::Absent => {}
+                Probe::Ready(m) => out.push(m),
+                Probe::Silent { bus, edid } => {
+                    let known = old
+                        .iter_mut()
+                        .find(|o| o.as_ref().is_some_and(|m| m.bus == bus && m.edid == edid))
+                        .and_then(Option::take);
+                    match known {
+                        Some(m) => out.push(m),
+                        // Its brightness range is unknown until it answers, so
+                        // it cannot be driven yet.
+                        None => pending = true,
+                    }
+                }
+            }
+        }
+
+        // Two identical monitors would otherwise share one name, and with it one
+        // per-monitor override. Disambiguate by serial, else by bus.
+        let bases: Vec<String> = out.iter().map(|m| m.base.clone()).collect();
+        for m in &mut out {
+            m.name = if bases.iter().filter(|b| **b == m.base).count() > 1 {
+                let suffix = m.serial.clone().unwrap_or_else(|| format!("i2c-{}", m.bus));
+                format!("{} ({suffix})", m.base)
+            } else {
+                m.base.clone()
+            };
+        }
+
+        (out, pending)
     }
 
     fn drm_connectors() -> Vec<(String, String)> {
@@ -205,7 +301,7 @@ mod ddc {
         out
     }
 
-    fn scan() -> Vec<Monitor> {
+    fn scan() -> Vec<Probe<I2cDeviceDdc>> {
         let mut buses: Vec<u32> = fs::read_dir("/sys/bus/i2c/devices")
             .into_iter()
             .flatten()
@@ -220,43 +316,45 @@ mod ddc {
             })
             .collect();
         buses.sort_unstable();
-
-        let mut found: Vec<(Monitor, Option<String>, u32)> =
-            buses.into_iter().filter_map(probe).collect();
-
-        // Two identical monitors would otherwise share one name, and with it one
-        // per-monitor override. Disambiguate by serial, else by bus.
-        let names: Vec<String> = found.iter().map(|(m, _, _)| m.name.clone()).collect();
-        for (mon, serial, bus) in &mut found {
-            if names.iter().filter(|n| **n == mon.name).count() > 1 {
-                let suffix = serial.clone().unwrap_or_else(|| format!("i2c-{bus}"));
-                mon.name = format!("{} ({suffix})", mon.name);
-            }
-        }
-
-        found.into_iter().map(|(m, _, _)| m).collect()
+        buses.into_iter().map(probe).collect()
     }
 
-    /// Opens one bus. Returns `None` unless a monitor with a valid EDID answers
-    /// a brightness read, so nothing is ever written to anything else.
-    fn probe(bus: u32) -> Option<(Monitor, Option<String>, u32)> {
-        let mut ddc = ddc_i2c::from_i2c_device(format!("/dev/i2c-{bus}")).ok()?;
+    /// Opens one bus. Only a monitor with a valid EDID that answers a
+    /// brightness read is `Ready`, so nothing is ever written to anything else.
+    fn probe(bus: u32) -> Probe<I2cDeviceDdc> {
+        let Ok(mut handle) = ddc_i2c::from_i2c_device(format!("/dev/i2c-{bus}")) else {
+            return Probe::Absent;
+        };
 
         let mut edid = [0u8; 128];
-        let read = ddc.read_edid(0, &mut edid).ok()?;
-        if read < edid.len() {
-            return None;
+        if !handle
+            .read_edid(0, &mut edid)
+            .is_ok_and(|read| read >= edid.len())
+        {
+            return Probe::Absent;
         }
-        let (model, serial) = parse_edid(&edid)?;
+        let Some((model, serial)) = parse_edid(&edid) else {
+            return Probe::Absent;
+        };
 
-        let vcp = (0..2).find_map(|_| ddc.get_vcp_feature(VCP_BRIGHTNESS).ok())?;
-        let max = vcp.maximum();
-        if max == 0 {
-            return None;
-        }
+        let max = (0..2)
+            .find_map(|_| handle.get_vcp_feature(VCP_BRIGHTNESS).ok())
+            .map(|vcp| vcp.maximum())
+            .filter(|&max| max > 0);
+        let Some(max) = max else {
+            return Probe::Silent { bus, edid };
+        };
 
-        let name = model.unwrap_or_else(|| format!("i2c-{bus}"));
-        Some((Monitor { name, ddc, max }, serial, bus))
+        let base = model.unwrap_or_else(|| format!("i2c-{bus}"));
+        Probe::Ready(Monitor {
+            name: base.clone(),
+            base,
+            serial,
+            bus,
+            edid,
+            handle,
+            max,
+        })
     }
 
     /// Validates the EDID base block and extracts the monitor name (descriptor
@@ -290,6 +388,114 @@ mod ddc {
         }
         Some((model, serial))
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{Monitor, Probe, merge};
+
+        fn edid(tag: u8) -> [u8; 128] {
+            let mut e = [0u8; 128];
+            e[0] = tag;
+            e
+        }
+
+        fn mon(bus: u32, base: &str, serial: Option<&str>, tag: u8) -> Monitor<()> {
+            Monitor {
+                name: base.into(),
+                base: base.into(),
+                serial: serial.map(Into::into),
+                bus,
+                edid: edid(tag),
+                handle: (),
+                max: 100,
+            }
+        }
+
+        fn names(monitors: &[Monitor<()>]) -> Vec<&str> {
+            monitors.iter().map(|m| m.name.as_str()).collect()
+        }
+
+        #[test]
+        fn monitor_in_standby_is_kept() {
+            let mut known = mon(6, "Monitor A", None, 1);
+            known.max = 75;
+            let (out, pending) = merge(
+                vec![known],
+                vec![Probe::Silent {
+                    bus: 6,
+                    edid: edid(1),
+                }],
+            );
+            assert_eq!(names(&out), ["Monitor A"]);
+            assert_eq!(out[0].max, 75, "keeps the range learnt while awake");
+            assert!(!pending);
+        }
+
+        #[test]
+        fn unplugged_monitor_is_dropped() {
+            let (out, pending) = merge(vec![mon(6, "Monitor A", None, 1)], vec![Probe::Absent]);
+            assert!(out.is_empty());
+            assert!(!pending);
+        }
+
+        #[test]
+        fn different_monitor_on_same_bus_is_not_confused() {
+            let (out, pending) = merge(
+                vec![mon(6, "Monitor A", None, 1)],
+                vec![Probe::Silent {
+                    bus: 6,
+                    edid: edid(2),
+                }],
+            );
+            assert!(out.is_empty());
+            assert!(pending);
+        }
+
+        #[test]
+        fn unknown_silent_monitor_schedules_a_retry() {
+            let (out, pending) = merge(
+                Vec::new(),
+                vec![
+                    Probe::Ready(mon(5, "Monitor B", None, 1)),
+                    Probe::Silent {
+                        bus: 6,
+                        edid: edid(2),
+                    },
+                ],
+            );
+            assert_eq!(names(&out), ["Monitor B"]);
+            assert!(pending);
+        }
+
+        #[test]
+        fn identical_models_are_disambiguated() {
+            let (out, _) = merge(
+                Vec::new(),
+                vec![
+                    Probe::Ready(mon(5, "Twin", Some("A1"), 1)),
+                    Probe::Ready(mon(7, "Twin", None, 2)),
+                ],
+            );
+            assert_eq!(names(&out), ["Twin (A1)", "Twin (i2c-7)"]);
+        }
+
+        #[test]
+        fn kept_and_fresh_twins_still_get_distinct_names() {
+            let mut asleep = mon(5, "Twin", Some("A1"), 1);
+            asleep.name = "Twin (A1)".into();
+            let (out, _) = merge(
+                vec![asleep],
+                vec![
+                    Probe::Silent {
+                        bus: 5,
+                        edid: edid(1),
+                    },
+                    Probe::Ready(mon(7, "Twin", Some("B2"), 2)),
+                ],
+            );
+            assert_eq!(names(&out), ["Twin (A1)", "Twin (B2)"]);
+        }
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -316,10 +522,10 @@ mod tests {
 
     #[test]
     fn edid_name_and_serial() {
-        let e = edid_with(&[(0xFC, "VG272U W2"), (0xFF, "245218BFA4210")]);
+        let e = edid_with(&[(0xFC, "Monitor A"), (0xFF, "SN0000001")]);
         assert_eq!(
             parse_edid(&e),
-            Some((Some("VG272U W2".into()), Some("245218BFA4210".into())))
+            Some((Some("Monitor A".into()), Some("SN0000001".into())))
         );
     }
 
