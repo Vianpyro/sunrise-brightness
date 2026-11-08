@@ -269,7 +269,7 @@ mod ddc {
 
         let mut model = None;
         let mut serial = None;
-        for desc in edid[54..126].chunks_exact(18) {
+        for desc in edid[54..126].as_chunks::<18>().0 {
             if desc[..3] != [0, 0, 0] {
                 continue; // a detailed timing, not a display descriptor
             }
