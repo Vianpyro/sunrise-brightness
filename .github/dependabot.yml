@@ -22,6 +22,16 @@ updates:
     groups:
       crates:
         patterns: ["*"]
+    # Their next versions change the API the code uses (ddc 0.3: the Ddc traits and read_edid;
+    # solar-positioning 0.7: time::DeltaT, types and spa made private). Dependabot cannot migrate
+    # code, and one of them in the group keeps every other crate update red. Before 1.0 the minor
+    # is the breaking component, so both are held back, patches still come. Remove an entry with
+    # the change that migrates the code.
+    ignore:
+      - dependency-name: ddc
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: solar-positioning
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   # The actions are pinned by commit SHA, with the tag as a comment: Dependabot moves both
   - package-ecosystem: github-actions
