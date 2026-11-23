@@ -1,0 +1,46 @@
+# Merges a Dependabot pull request once its CI is green, and only then: the commit merged is the one
+# CI tested (--match-head-commit). A merge made with GITHUB_TOKEN triggers no push workflow, so CI
+# is dispatched on main, and version.yml releases after it (build(deps) raises the patch).
+name: Dependabot
+
+# Not a dangerous trigger here: nothing from the pull request is checked out or run, the job only
+# calls the GitHub API, and only for a pull request opened by Dependabot in this repository.
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          pr=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number,author,headRefOid \
+            --jq ".[] | select(.author.login == \"app/dependabot\" and .headRefOid == \"$SHA\") | .number")
+          if [ -z "$pr" ]; then
+            echo "No open Dependabot pull request at $SHA (merged, closed, or pushed again since)"
+            exit 0
+          fi
+          gh pr merge "$pr" --repo "$REPO" --squash --match-head-commit "$SHA"
+          gh workflow run ci.yml --repo "$REPO" --ref main

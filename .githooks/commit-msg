@@ -1,0 +1,20 @@
+#!/bin/sh
+# Refuses a commit whose subject does not follow Conventional Commits, which .github/release.sh
+# reads to pick the next version. Enable it with: git config core.hooksPath .githooks
+# CI runs it on every pushed commit, for those that skipped it (web editor, Dependabot, another clone).
+
+subject=$(grep -v '^#' "$1" | grep -m 1 .)
+types='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
+
+# "Merge " lets a git pull merge through, e.g. after the release bot's bump; "Revert " is GitHub's
+# revert button.
+printf '%s\n' "$subject" | grep -qE "^($types)(\([^()]+\))?!?: [^ ].*[^.]$|^Merge |^Revert \"" && exit 0
+
+cat >&2 <<EOF
+commit-msg: refused: "$subject"
+Expected <type>(<optional scope>)<optional !>: <description>
+  type: $types
+  description: no final period
+Release: feat raises the minor, fix, perf and build(deps) the patch, ! or BREAKING CHANGE: the major.
+EOF
+exit 1

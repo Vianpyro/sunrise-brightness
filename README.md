@@ -1,5 +1,9 @@
 # Sunrise Brightness
 
+[![CI](https://github.com/Vianpyro/sunrise-brightness/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Vianpyro/sunrise-brightness/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Vianpyro/sunrise-brightness)](https://github.com/Vianpyro/sunrise-brightness/releases/latest)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Vianpyro/sunrise-brightness/badge)](https://scorecard.dev/viewer/?uri=github.com/Vianpyro/sunrise-brightness)
+
 Automatically adjusts your screen brightness throughout the day based on the sun's position. Runs in the system tray and adapts to weather conditions.
 
 ![Curve Editor](illustration.png)
@@ -124,3 +128,32 @@ All release binaries include [SLSA build provenance attestations](https://slsa.d
 ```bash
 gh attestation verify sunrise-brightness-linux --repo Vianpyro/sunrise-brightness
 ```
+
+Each release also lists the SHA-256 of every file in `SHA256SUMS`:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+## Contributing
+
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat: ...`, `fix(display): ...`): CI refuses the others, and the release is chosen from them. Enable the hooks once per clone to check them, and the formatting and lints, before each commit:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Every pull request runs `ci.yml`: formatting, Clippy and the tests on Linux and Windows, the licenses and sources of the crates (`deny.toml`), the Nix package, the shell scripts and the workflows. Its `gate` job sums them up.
+
+### Releases
+
+Releases are automatic. After a green CI on `main`, `.github/release.sh` reads the commits since the last tag:
+
+| Commits since the last release            | Next version |
+| ----------------------------------------- | ------------ |
+| `feat!:`, `fix!:`... or `BREAKING CHANGE:` | major        |
+| `feat:`                                   | minor        |
+| `fix:`, `perf:`, `build(deps):`           | patch        |
+| anything else (`docs:`, `ci:`, `chore:`)  | no release   |
+
+It commits the new version, tags it, and `release.yml` builds and publishes the binaries. A version raised by hand in `Cargo.toml` is kept. Dependabot proposes crate and action updates every Monday; its pull requests are merged once CI passes, and a crate update releases a patch.

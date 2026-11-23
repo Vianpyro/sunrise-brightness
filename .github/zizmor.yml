@@ -1,0 +1,14 @@
+# Exceptions to zizmor's audits (lint job of ci.yml), each with why it is safe.
+rules:
+  # release.sh pushes the bump commit and the tag with the checkout's credentials, and nothing else
+  # runs in that job: no artifact or later step could leak them
+  artipacked:
+    ignore:
+      - version.yml
+  # $/... (GitHub, July 2026) is safer than ./..., but actionlint 1.7.12 rejects it ("ref is
+  # missing"). Remove these once an actionlint that accepts it is out.
+  self-repository:
+    ignore:
+      - ci.yml
+      - nightly.yml
+      - release.yml

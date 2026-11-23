@@ -1,0 +1,51 @@
+# cargo deny: what a crate must be to ship in the release binaries.
+# ci.yml checks licenses, bans and sources on every change; nightly.yml checks advisories, which
+# change without a commit here. Run locally: cargo deny check
+
+[graph]
+# The two release targets (release.yml): a crate used only on another target is never shipped
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
+[advisories]
+# Unmaintained crates are reported for the direct dependencies, the ones we chose
+unmaintained = "workspace"
+yanked = "deny"
+ignore = [
+  # chrono is unmaintained: a direct dependency (solar-positioning needs it too), whose replacement
+  # is a change of its own. Remove this line with that change.
+  { id = "RUSTSEC-2026-0543", reason = "replacing chrono is tracked separately" },
+]
+
+[licenses]
+# Permissive licenses, and MPL-2.0 (file-level copyleft), all compatible with the MIT license of
+# the binaries. A new license is a decision: add it here with the crate that needs it.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "0BSD",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "CC0-1.0",
+  "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+# The fonts egui embeds in the binary (Hack, Ubuntu, Noto emoji): free font licenses, which allow
+# bundling them with software of any license
+[[licenses.exceptions]]
+crate = "epaint_default_fonts"
+allow = ["OFL-1.1", "Ubuntu-font-1.0"]
+
+[bans]
+# Two versions of one crate are compiled twice: reported, not refused
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# crates.io only: no git dependency, no other registry
+unknown-registry = "deny"
+unknown-git = "deny"

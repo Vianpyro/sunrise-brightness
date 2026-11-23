@@ -1,12 +1,41 @@
+# Crates and actions, updated by pull request every Monday, each ecosystem in one grouped pull
+# request. dependabot-merge.yml merges it once CI is green; a crate update then releases a patch
+# (build(deps), .github/release.sh), an action update releases nothing (ci(deps)).
 version: 2
 updates:
-  - package-ecosystem: "cargo"
-    directory: "/"
+  - package-ecosystem: cargo
+    directory: /
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: weekly
+      day: monday
+      timezone: America/Toronto
+    # A release waits a week before it is proposed: time for a compromised one to be caught and
+    # yanked. Security updates do not wait.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
+    # build(deps): ..., which the commit-msg check in CI accepts
+    commit-message:
+      prefix: build
+      include: scope
+    labels: [dependencies]
     groups:
-      dependencies:
-        patterns:
-          - "*"
+      crates:
+        patterns: ["*"]
+
+  # The actions are pinned by commit SHA, with the tag as a comment: Dependabot moves both
+  - package-ecosystem: github-actions
+    directories: ["/", "/.github/actions/*"]
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: America/Toronto
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci
+      include: scope
+    labels: [dependencies]
+    groups:
+      actions:
+        patterns: ["*"]

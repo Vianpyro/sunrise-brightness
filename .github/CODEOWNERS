@@ -1,0 +1,7 @@
+# Every change needs a maintainer's review; the pipeline and the release rule most of all.
+*                  @Vianpyro
+/.github/          @Vianpyro
+/.githooks/        @Vianpyro
+/Cargo.toml        @Vianpyro
+/Cargo.lock        @Vianpyro
+/deny.toml         @Vianpyro

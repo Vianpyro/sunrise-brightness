@@ -1,0 +1,49 @@
+# After a green CI on main: bumps the version if the commits call for it, then tags any untagged
+# version and starts release.yml on it (.github/release.sh). A push made with GITHUB_TOKEN, like
+# the bump commit, triggers no other workflow: no loop with CI, and release.yml is started by a
+# dispatch. Adapted from github.com/Vianpyro/pals and github.com/vianatets/log200-scoreboard.
+name: Version
+
+# Not a dangerous trigger here: the job runs only for CI on main started by a push or by a
+# maintainer's dispatch (dependabot-merge.yml dispatches it after a merge), never for the CI of a
+# pull request, and checks out the commit that CI tested.
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: version
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # workflow_run also fires for pull requests' CI, whose code is not trusted
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      contains(fromJSON('["push", "workflow_dispatch"]'), github.event.workflow_run.event)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      # The credentials stay: release.sh pushes the bump commit and the tag. Nothing else runs in
+      # this job (.github/zizmor.yml).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      # If main moved since this CI run, the bump push fails; the next run takes over
+      - run: bash .github/release.sh
+        env:
+          GH_TOKEN: ${{ github.token }}

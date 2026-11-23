@@ -1,0 +1,249 @@
+# Every check of a change. "gate" sums them up, the one check a ruleset needs to require: it passes
+# when every job passed or was skipped because the change does not concern it (.github/paths).
+# Pull requests from forks get a read-only token and no secret: nothing here needs more.
+# Adapted from github.com/Vianpyro/pals (.github/workflows/ci.yml).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Which areas the change touches. Every area on main: a release is built from all of it.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      rust: ${{ steps.areas.outputs.rust }}
+      nix: ${{ steps.areas.outputs.nix }}
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: areas
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            git diff --name-only "$BASE...HEAD" | bash .github/changes.sh .github/paths
+          else
+            ALL=1 bash .github/changes.sh .github/paths </dev/null
+          fi | tee -a "$GITHUB_OUTPUT"
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Every tracked script, so a new one is checked without being listed here
+      - name: Shell scripts
+        run: git ls-files -z '*.sh' '.githooks/*' | xargs -0 shellcheck
+
+      # The commit-msg hook, for the commits that skipped it: web editor, Dependabot, another clone.
+      # release.sh picks the next version from these messages.
+      - name: Commit messages
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RANGE: ${{ github.event.pull_request.base.sha || github.event.before }}..${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # A new branch has no "before": its own commits only
+          case "$RANGE" in 0000000*) RANGE=${RANGE#*..} ;; esac
+          status=0
+          for sha in $(git rev-list --no-merges "$RANGE"); do
+            git log -1 --format=%B "$sha" > "$RUNNER_TEMP/message"
+            sh .githooks/commit-msg "$RUNNER_TEMP/message" || status=1
+          done
+          exit "$status"
+
+      # Secrets in the commits pushed; security.yml scans the whole history
+      - name: Secrets
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RANGE: ${{ github.event.pull_request.base.sha || github.event.before }}..${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          case "$RANGE" in 0000000*) RANGE=${RANGE#*..} ;; esac
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo" -w /repo \
+            zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git --redact --no-banner --log-opts="$RANGE" .
+
+      # The commit-msg hook and the version bump rule of release.sh
+      - name: Release
+        run: bash tests/release/check.sh
+
+      - name: Workflows
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
+
+      # Template injection, excessive permissions, unpinned or impostor actions, cache poisoning
+      - name: Workflow security
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pipx run --spec zizmor==1.32.0 zizmor --format=github .
+
+  rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/linux-deps
+
+      # Saved from main only: a pull request cannot poison the cache main builds from
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: cargo-nextest@0.9.151,cargo-llvm-cov@0.9.1,cargo-deny@0.20.2
+
+      - name: Format
+        run: cargo fmt --check
+
+      # --locked: a Cargo.lock that does not match Cargo.toml, or names a version crates.io does
+      # not have, fails here rather than in the release
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      # Licenses, banned crates, and crates.io as the only source (deny.toml). Advisories run
+      # nightly (nightly.yml), since a new one would fail every pull request; dependency-review
+      # covers the vulnerable crates a pull request adds.
+      - name: Dependencies
+        run: cargo deny --locked check bans licenses sources
+
+      # One instrumented run for the tests and the coverage
+      - name: Tests
+        run: |
+          cargo llvm-cov nextest --locked --all-features --lcov --output-path lcov.info
+          {
+            echo '### Rust coverage'
+            echo '```'
+            cargo llvm-cov report --summary-only
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The code behind cfg(windows) and the Windows crates (brightness, tray-icon) build only here
+  windows:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked --all-features
+
+  # The flake as a NixOS user gets it: the package builds from Cargo.lock (cargoLock.lockFile),
+  # the module and the dev shell evaluate, the Nix files are formatted
+  nix:
+    needs: changes
+    if: needs.changes.outputs.nix == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@382a9ed9481c7c1f94f68b72ef105b3417c73877 # v32.1.0
+
+      - name: Format
+        run: nix fmt -- --check flake.nix nix/*.nix
+
+      - name: Flake
+        run: nix flake check --no-build -L
+
+      - name: Package
+        run: nix build -L --no-link .#default
+
+  # Dependencies a pull request adds: known vulnerabilities and licenses
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          # The list of deny.toml, and its exception: the fonts egui embeds
+          allow-licenses: >-
+            MIT, Apache-2.0, Apache-2.0 WITH LLVM-exception, BSD-2-Clause, BSD-3-Clause, 0BSD,
+            ISC, Zlib, Unicode-3.0, CC0-1.0, MPL-2.0
+          allow-dependencies-licenses: pkg:cargo/epaint_default_fonts
+
+  # The only required check. Skipped jobs pass: their area did not change.
+  gate:
+    if: always()
+    needs: [changes, lint, rust, windows, nix, dependency-review]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.value.result)\t\(.key)"' <<<"$NEEDS"
+          jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<<"$NEEDS" >/dev/null

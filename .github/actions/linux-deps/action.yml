@@ -1,0 +1,15 @@
+# The libraries the crate links against on Linux (README, "Building from source"), and dpkg-dev for
+# the .deb of release.yml. One list for ci.yml, release.yml and nightly.yml.
+name: Linux build dependencies
+description: Installs the GTK, tray icon, X11 and Wayland development packages
+
+runs:
+  using: composite
+  steps:
+    # A hung Ubuntu mirror fails the job in minutes rather than at its timeout
+    - shell: bash
+      run: |
+        timeout 300 sudo apt-get update
+        timeout 600 sudo apt-get install -y --no-install-recommends \
+          build-essential pkg-config dpkg-dev \
+          libgtk-3-dev libappindicator3-dev libxdo-dev libssl-dev libwayland-dev

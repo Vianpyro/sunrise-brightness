@@ -1,0 +1,13 @@
+# Areas of the repository, read by .github/changes.sh: "area glob", one pattern per line. A pull
+# request runs the jobs of the areas it touches (ci.yml); a change under .github/ selects them all,
+# and so does a push to main, since a release is built from everything.
+rust src/*
+rust Cargo.toml
+rust Cargo.lock
+rust deny.toml
+nix flake.nix
+nix flake.lock
+nix nix/*
+nix Cargo.toml
+nix Cargo.lock
+nix sunrise-brightness.svg
