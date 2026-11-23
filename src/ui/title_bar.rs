@@ -10,7 +10,11 @@ impl SettingsApp {
 
         let bar_rect =
             egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), 28.0));
-        let drag = ui.interact(bar_rect, egui::Id::new("title_drag"), egui::Sense::drag());
+        let drag = ui.interact(
+            bar_rect,
+            egui::Id::unique("title_drag"),
+            egui::Sense::drag(),
+        );
         if drag.dragged() {
             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }

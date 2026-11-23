@@ -164,8 +164,13 @@ impl eframe::App for SettingsApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
 
+        // Closing the root viewport makes `run_native` return, so `main` ends
+        // normally and drops the GL context, window and tray icon in order.
+        // The flag stays set so the close request below is never cancelled.
         if self.menu.quit.load(Ordering::Relaxed) {
-            std::process::exit(0);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            ctx.request_repaint();
+            return;
         }
 
         if self.menu.open_settings.swap(false, Ordering::Relaxed) {
@@ -175,15 +180,13 @@ impl eframe::App for SettingsApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
 
+        // On Linux the window is the app, so its close goes through and quits.
+        // Elsewhere it only hides to the tray.
+        #[cfg(not(target_os = "linux"))]
         if ctx.input(|i| i.viewport().close_requested()) {
-            #[cfg(target_os = "linux")]
-            std::process::exit(0);
-            #[cfg(not(target_os = "linux"))]
-            {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                self.visible = false;
-            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.visible = false;
         }
 
         // Only while the window is on screen, so the status readouts stay live.
@@ -315,7 +318,7 @@ impl eframe::App for SettingsApp {
 
         if should_close {
             #[cfg(target_os = "linux")]
-            std::process::exit(0);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             #[cfg(not(target_os = "linux"))]
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));

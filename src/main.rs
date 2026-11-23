@@ -55,6 +55,15 @@ fn main() -> Result<()> {
     let settings_id = item_settings.id().clone();
     let quit_id = item_quit.id().clone();
 
+    // Registered before the window exists so a signal sent during startup is
+    // queued rather than killing the process with the default action.
+    #[cfg(unix)]
+    let signals = signal_hook::iterator::Signals::new([
+        signal_hook::consts::SIGTERM,
+        signal_hook::consts::SIGINT,
+        signal_hook::consts::SIGHUP,
+    ])?;
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([480.0, 640.0])
@@ -71,6 +80,8 @@ fn main() -> Result<()> {
             // Waking the event loop on a menu click is what lets the app ask for
             // no periodic repaint at all while it sits hidden in the tray.
             let ctx = cc.egui_ctx.clone();
+            #[cfg(unix)]
+            watch_signals(signals, Arc::clone(&menu), ctx.clone());
             MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
                 if event.id == settings_id {
                     menu.open_settings.store(true, Ordering::Relaxed);
@@ -85,6 +96,34 @@ fn main() -> Result<()> {
     .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     Ok(())
+}
+
+/// How long a stop signal waits for the event loop before exiting anyway.
+/// Under the session's own deadline: systemd escalates after 5 s, and KWin
+/// sends SIGABRT to a client that stopped answering, which leaves a core dump.
+#[cfg(unix)]
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Turns SIGTERM, SIGINT and SIGHUP into the tray's Quit, so logging out or
+/// shutting down closes the window and returns from `main` like a user quit.
+#[cfg(unix)]
+fn watch_signals(
+    mut signals: signal_hook::iterator::Signals,
+    menu: Arc<ui::MenuFlags>,
+    ctx: egui::Context,
+) {
+    std::thread::spawn(move || {
+        if signals.forever().next().is_none() {
+            return;
+        }
+        menu.quit.store(true, Ordering::Relaxed);
+        ctx.request_repaint();
+
+        // The event loop can be stuck on a compositor that is itself going
+        // away; nothing is left to save, so leave on time rather than be killed.
+        std::thread::sleep(SHUTDOWN_GRACE);
+        std::process::exit(0);
+    });
 }
 
 fn sun_icon() -> tray_icon::Icon {
